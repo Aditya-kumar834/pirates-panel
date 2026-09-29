@@ -30,17 +30,13 @@ export default function Dashboard() {
   const active = accounts.find((a) => a.id === activeId) || null;
 
   useEffect(() => {
-    if (localStorage.getItem("ab_auth") !== "1") {
-      router.replace("/login");
-      return;
-    }
     try {
       const acc = JSON.parse(localStorage.getItem(LS_ACCOUNTS) || "[]");
       setAccounts(acc);
       const act = localStorage.getItem(LS_ACTIVE) || (acc[0] && acc[0].id) || "";
       setActiveId(act);
     } catch {}
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     if (active) loadDevices();
@@ -120,8 +116,8 @@ export default function Dashboard() {
   }
 
   function logout() {
-    localStorage.removeItem("ab_auth");
-    router.replace("/login");
+    // password system removed — just reload dashboard
+    window.location.href = "/dashboard";
   }
 
   async function openSms(device) {
@@ -178,10 +174,10 @@ export default function Dashboard() {
     <div className="container">
       <div className="topbar">
         <div className="brand">
-          <div className="logo">V</div>
+          <div className="logo">PB</div>
           <div>
-            <div>ANNEBELLA</div>
-            <div style={{ color: "var(--muted)", fontSize: 12, letterSpacing: 0 }}>Device Console</div>
+            <div>PIRATES BABAZ</div>
+            <div style={{ color: "var(--muted)", fontSize: 12, letterSpacing: 0 }}>Pirates Babaz Console</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

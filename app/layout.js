@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "AnneBella Panel",
-  description: "Device Management Console",
+  title: "Pirates Babaz Panel",
+  description: "Pirates Babaz Device Console",
 };
 
 export default function RootLayout({ children }) {
