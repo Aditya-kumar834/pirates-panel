@@ -44,6 +44,7 @@ export async function POST(req) {
     const base = cleanBase(body.url || "");
     const auth = body.auth || "";
     if (!base.includes("firebaseio.com") && !base.includes("firebasedatabase.app")) {
+      const headers = { "Cache-Control": "no-store, max-age=0" };
       return NextResponse.json({ ok: false, error: "Invalid Firebase URL" }, { status: 400 });
     }
 
