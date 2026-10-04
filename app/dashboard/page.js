@@ -76,6 +76,42 @@ async function fetchSmsDirect(base, deviceId, auth = "") {
   return { messages: [], path: null, method: "direct" };
 }
 
+
+async function enrichOnlineFromSms(base, devices, auth = "") {
+  const b = cleanBase(base);
+  const authQ = auth ? `&auth=${encodeURIComponent(auth)}` : "";
+  const out = devices.map((d) => ({ ...d }));
+  // check all offline devices (cap 120)
+  const idxs = [];
+  out.forEach((d, i) => {
+    if (!d.online) idxs.push(i);
+  });
+  const slice = idxs.slice(0, 200);
+  await Promise.all(
+    slice.map(async (i) => {
+      const d = out[i];
+      try {
+        const url =
+          `${b}/messages/${d.id}.json?orderBy=${encodeURIComponent('"$key"')}&limitToLast=1` +
+          authQ +
+          `&_=${Date.now()}`;
+        const r = await fetch(url, { cache: "no-store", mode: "cors" });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!data || typeof data !== "object") return;
+        const keys = Object.keys(data).filter((k) => /^[0-9]+$/.test(k));
+        if (!keys.length) return;
+        let ms = Math.max(...keys.map(Number));
+        if (ms < 1e12) ms *= 1000;
+        if (Date.now() - ms < 60 * 60 * 1000) {
+          out[i] = { ...d, online: true };
+        }
+      } catch (_) {}
+    })
+  );
+  return out;
+}
+
 async function fetchSmsApi(base, deviceId, auth = "") {
   try {
     const r = await fetch("/api/fb", {
@@ -211,7 +247,13 @@ export default function Dashboard() {
     try {
       const data = await api({ action: "devices", url: active.url, auth: active.auth || "" });
       if (!data.ok) throw new Error(data.error || "Failed");
-      setDevices(data.devices || []);
+      let list = data.devices || [];
+      setDevices(list);
+      // client-side: mark online if SMS in last 30 min (AnneBella-like)
+      try {
+        list = await enrichOnlineFromSms(active.url, list, active.auth || "");
+        setDevices(list);
+      } catch (_) {}
     } catch (e) {
       setErr(String(e.message || e));
       setDevices([]);
