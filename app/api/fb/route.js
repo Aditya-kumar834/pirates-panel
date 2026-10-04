@@ -85,30 +85,17 @@ export async function POST(req) {
       let lastError = null;
 
       for (const p of smsPaths(deviceId)) {
-        // CRITICAL: large inboxes (10k+) must use limitToLast
-        const limitedPath = `${p}.json?orderBy="$key"&limitToLast=50`.replace(".json.json", ".json");
-        // fbGet already adds .json — pass path carefully
-        const r = await fbGet(base, `${p}?orderBy="$key"&limitToLast=50`, auth);
+        // ONLY last 60 — full node can be 8000+ and times out
+        const r = await fbGet(base, `${p}?orderBy="$key"&limitToLast=60`, auth);
         if (r.ok && r.data && typeof r.data === "object" && !Array.isArray(r.data)) {
           const rows = normalizeSms(r.data);
           if (rows.length) {
             messages = rows;
-            used = p + " (last 50)";
+            used = p + " (last 60)";
             break;
           }
         } else if (r.error || r.status) {
           lastError = r.error || `HTTP ${r.status}`;
-        }
-
-        // fallback small full node
-        const r2 = await fbGet(base, p, auth);
-        if (r2.ok && r2.data && typeof r2.data === "object") {
-          const rows = normalizeSms(r2.data);
-          if (rows.length) {
-            messages = rows.slice(0, 50);
-            used = p;
-            break;
-          }
         }
       }
 
